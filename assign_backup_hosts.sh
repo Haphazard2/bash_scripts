@@ -1,14 +1,13 @@
 #!/bin/bash
 #
-#backup_servers=($(/usr/local/bin/dsh -eg storage.ops.sac 'uname -n' |cut -d: -f1))
 source /usr/local/lib64/bash/mysql_common
-backup_servers=(storage{101..107}.ops.sac.int.threatmetrix.com)
+backup_servers=(backup{101..107}.threatmetrix.com)
 #
 #Ordered by token range
 #
 ### C* Node arrays
-api_cassandra=($(ssh api-cassandra101.prod.sac.int.threatmetrix.com /usr/local/dse/bin/nodetool ring |egrep ^10\.200 |awk '{print $1}'))
-smartid_cass=($(ssh smartid101.prod.sac.int.threatmetrix.com /usr/local/dse/bin/nodetool ring |egrep ^10\.200\.36 |awk '{print $1}'))
+main_c_cluster=($(ssh main_c_cluster.threatmetrix.com /usr/local/dse/bin/nodetool ring |egrep ^10\.200 |awk '{print $1}'))
+solr_cluster=($(ssh solr_cluster.threatmetrix.com /usr/local/dse/bin/nodetool ring |egrep ^10\.200\.36 |awk '{print $1}'))
 offset=0        # Change which set of "every third node", valid numbers are 0 to $rf - 1
 backup_day=1    # Delete this value to stripe backups across days of the week
 
@@ -17,15 +16,15 @@ x=0  # Array position of the backup server list
 y=0  # Day of week: '+%w'
 rf=3 # Replication Factor of cluster
 
-echo "\"backup_type\",\"client_server\",\"storage_server\",\"state\",\"running\",\"dow\""
+echo "\"backup_type\",\"client_server\",\"backup_server\",\"state\",\"running\",\"dow\""
 # Select every third node in the ring
-while [[ $i -ne ${#api_cassandra[@]} ]] ; do
+while [[ $i -ne ${#main_c_cluster[@]} ]] ; do
     mod=$(($i % $rf))
     if [[ $mod -eq ${offset:-0} ]] ; then
-        host=$(host ${api_cassandra[$i]} |awk '{print $NF}' |sed 's/\.sac\.int\.threatmetrix\.com\.//g')
-        storage_server=$(echo ${backup_servers[$x]} |sed 's/\.sac\.int\.threatmetrix\.com//g')
+        host=$(host ${main_c_cluster[$i]} |awk '{print $NF}' |sed 's/\.threatmetrix\.com\.//g')
+        backup_server=$(echo ${backup_servers[$x]} |sed 's/\.threatmetrix\.com//g')
         #echo "\"casasandra\",\"${host}\",\"${backup_servers[$x]}\",\"1\",\"0\",\"${y}\""
-        echo "	casasandra	$storage_server	$host	1	0	${y}"
+        echo "	casasandra	$backup_server	$host	1	0	${y}"
         if [[ $x -eq $(( ${#backup_servers[@]} -1 )) ]] ; then
             x=0 
             [[ $y -eq 6 ]] && { y=0 ; } || { y=$(($y + 1)) ; }
@@ -38,13 +37,13 @@ done
 # Slightly different requirements for the Solr cluster 
 i=0
 rf=3
-while [[ $i -ne ${#smartid_cass[@]} ]] ; do
+while [[ $i -ne ${#solr_cluster[@]} ]] ; do
     mod=$(($i % $rf))
     if [[ $mod -eq 0 ]] ; then
-        host=$(host ${smartid_cass[$i]} |awk '{print $NF}' |sed 's/\.sac\.int\.threatmetrix\.com\.//g')
-        storage_server=$(echo ${backup_servers[$x]} |sed 's/\.sac\.int\.threatmetrix\.com//g')
+        host=$(host ${solr_cluster[$i]} |awk '{print $NF}' |sed 's/\.threatmetrix\.com\.//g')
+        backup_server=$(echo ${backup_servers[$x]} |sed 's/\.threatmetrix\.com//g')
         #echo "\"casasandra\",\"${host}\",\"${backup_servers[$x]}\",\"1\",\"0\",\"${y}\""
-        echo "	casasandra	$storage_server	$host	1	0	${y}"
+        echo "	casasandra	$backup_server	$host	1	0	${y}"
         [[ $x -eq $(( ${#backup_servers[@]} -1 )) ]] && { x=0 ; } || { x=$(($x + 1)) ; }
         [[ $y -eq 6 ]] && { y=0 ; } || { y=$(($y + 1)) ; }
     fi
