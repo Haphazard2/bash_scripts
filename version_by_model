@@ -1,0 +1,127 @@
+#!/bin/bash
+
+source /usr/local/lib64/bash/mysql_common #Contains account info
+
+## STATED CONSTANTS
+# Resolve Command Line Arguments
+MODEL=$1
+FIRMWARE=$2
+DB_SERVER=our_db_server.threatmetrix.com #name changed to protect the innocent
+
+## FUNCTIONS
+function sql_command() {
+    mysql --user=${OPS_MYSQL_REMOTE_USER} --password=${OPS_MYSQL_REMOTE_PASS} --host=${DB_SERVER} -D foreman -e "$1"
+}
+
+function model_list() {
+    sql_command "SELECT models.name FROM models WHERE name LIKE 'PowerEdge%'"
+}
+
+function firmware_list() {
+    sql_command "SELECT id,name from fact_names WHERE name LIKE '%bios%' AND id LIKE '536%'"
+}
+## PREFLIGHT
+
+if [[ -z $1 ]] ; then 
+    echo "Please enter a model from the following list"
+    model_list
+    echo "Note: This script excepts just the number portion, but use quotes if you enter the full name"
+    echo -n "Model [R630]: "
+    read MODEL
+    echo
+    echo "Select a specific firmware by ID from the following list:"
+    firmware_list
+    echo
+    echo -n "Enter firmware [ALL] ID: "
+    read FIRMWARE
+    echo
+fi
+
+[[ -z $MODEL ]] && MODEL=R630
+
+if [[ $(echo $MODEL |egrep -q '^[0-9]{3}' ; echo $?) -eq 0 ]] ; then    # if there is no leading R
+    FULL_MODEL="PowerEdge R${MODEL}"
+elif [[ $(echo $MODEL |wc -w) -eq 1 && $(echo $MODEL |egrep -q 'R' ; echo $?) -eq 0 ]] ; then  # only 1 word in $1 and it contains an 'R'
+    FULL_MODEL="PowerEdge ${MODEL}"
+else
+    FULL_MODEL=$MODEL
+fi
+echo "Running query on: $FULL_MODEL"
+
+if [[ $( echo $FIRMWARE |egrep -qo '536[0-9]{1}' ; echo $? ) -eq 0 ]] ; then
+    FIRMWARE_TYPE=ID
+elif [[ $( echo $FIRMWARE |egrep -q 'bios_[a-z]+' ; echo $? ) -eq 0 ]] ; then
+    FIRMWARE_TYPE=NAME
+else
+    FIRMWARE_TYPE=ALL
+fi
+
+RESULT_COUNT=$(sql_command "SELECT COUNT(1) FROM models WHERE name='$FULL_MODEL'" | egrep -ow '[0-9]+' |tail -1)
+
+if [[ $RESULT_COUNT -ne 1 ]] ; then
+    echo "Invalid Dell model selected for query."
+    echo "please select one of the following models:"
+    model_list
+    echo 
+    echo "Optionally, you can select just one firmware type to query from this list:"
+    firmware_list
+    exit 1
+fi
+
+
+## MAIN
+case $FIRMWARE_TYPE in
+    ID)
+sql_command "SELECT
+                h.name AS 'Host Name',
+                n.name AS Firmware,
+                v.value AS Version
+            FROM
+                fact_values v
+                JOIN
+                    hosts h ON h.id=v.host_id
+                JOIN
+                    fact_names n ON v.fact_name_id=n.id
+            WHERE
+                v.host_id IN (
+                SELECT
+                    host_id
+                FROM
+                    fact_values
+                WHERE
+                    fact_values.value='$FULL_MODEL' )
+                AND (
+                    v.fact_name_id='$FIRMWARE' )
+            ORDER BY h.name"
+    ;;
+    NAME)
+        echo "Under construction"
+#sql_command "SELECT
+#                h.name AS 'Host Name',
+#                n.name AS Firmware,
+#                v.value AS Version
+#            FROM
+#                fact_values v
+#                JOIN
+#                    hosts h ON h.id=v.host_id
+#                JOIN
+#                    fact_names n ON v.fact_name_id=n.id
+#            WHERE
+#                v.host_id IN (
+#                SELECT
+#                    host_id
+#                FROM
+#                    fact_values
+#                WHERE
+#                    fact_values.value='$FULL_MODEL' )
+#                AND (
+#                    v.value='$FIRMWARE' )
+#            ORDER BY h.name"
+    ;;
+    *)
+sql_command "SELECT h.name AS 'Host Name', n.name AS Firmware, v.value AS Version FROM fact_values v JOIN hosts h ON \
+        h.id=v.host_id JOIN fact_names n ON v.fact_name_id=n.id WHERE v.host_id IN ( SELECT host_id FROM fact_values \
+        WHERE fact_values.value='$FULL_MODEL' ) AND ( v.fact_name_id=5364 OR v.fact_name_id=5365 OR v.fact_name_id=5366 OR
+        v.fact_name_id=5367) ORDER BY h.name"
+    ;;
+esac
